@@ -1,0 +1,945 @@
+diff -u -r -p sql.orig/field.cc sql.patched/field.cc
+--- sql.orig/field.cc	2005-05-26 17:56:59.000000000 +0430
++++ sql.patched/field.cc	2005-10-28 19:15:30.000000000 +0330
+@@ -5323,7 +5323,13 @@ int Field_newdate::store(const char *fro
+     error= 1;
+   }
+   else
++  {
++    if (field_calendar->convert_date())
++      field_calendar->from_gregorian(&l_time);
++	else
++	  field_calendar->convert_date(1);
+     tmp= l_time.day + l_time.month*32 + l_time.year*16*32;
++  }
+ 
+   if (error)
+     set_datetime_warning(MYSQL_ERROR::WARN_LEVEL_WARN, WARN_DATA_TRUNCATED,
+@@ -5404,7 +5410,10 @@ int Field_newdate::store_time(TIME *ltim
+   long tmp;
+   int error= 0;
+   if (type == MYSQL_TIMESTAMP_DATE || type == MYSQL_TIMESTAMP_DATETIME)
++  {
++    field_calendar->from_gregorian(ltime);
+     tmp=ltime->year*16*32+ltime->month*32+ltime->day;
++  }
+   else
+   {
+     tmp=0;
+@@ -5444,24 +5453,32 @@ String *Field_newdate::val_str(String *v
+   val_buffer->alloc(field_length);
+   val_buffer->length(field_length);
+   uint32 tmp=(uint32) uint3korr(ptr);
+-  int part;
++
++  int part1,part2,part3;
++  part1=(int) (tmp & 31);
++  part2=(int) (tmp >> 5 & 15);
++  part3=(int) (tmp >> 9);
++  if (field_calendar->convert_date())
++	field_calendar->to_gregorian(&part3, &part2, &part1);
++  else
++    field_calendar->convert_date(1);
++
+   char *pos=(char*) val_buffer->ptr()+10;
+ 
+   /* Open coded to get more speed */
+   *pos--=0;					// End NULL
+-  part=(int) (tmp & 31);
+-  *pos--= (char) ('0'+part%10);
+-  *pos--= (char) ('0'+part/10);
++  *pos--= (char) ('0'+part1%10);
++  *pos--= (char) ('0'+part1/10);
+   *pos--= '-';
+-  part=(int) (tmp >> 5 & 15);
+-  *pos--= (char) ('0'+part%10);
+-  *pos--= (char) ('0'+part/10);
++  
++  *pos--= (char) ('0'+part2%10);
++  *pos--= (char) ('0'+part2/10);
+   *pos--= '-';
+-  part=(int) (tmp >> 9);
+-  *pos--= (char) ('0'+part%10); part/=10;
+-  *pos--= (char) ('0'+part%10); part/=10;
+-  *pos--= (char) ('0'+part%10); part/=10;
+-  *pos=   (char) ('0'+part);
++  
++  *pos--= (char) ('0'+part3%10); part3/=10;
++  *pos--= (char) ('0'+part3%10); part3/=10;
++  *pos--= (char) ('0'+part3%10); part3/=10;
++  *pos=   (char) ('0'+part3);
+   return val_buffer;
+ }
+ 
+@@ -5474,6 +5491,7 @@ bool Field_newdate::get_date(TIME *ltime
+   ltime->year=  (tmp >> 9);
+   ltime->time_type= MYSQL_TIMESTAMP_DATE;
+   ltime->hour= ltime->minute= ltime->second= ltime->second_part= ltime->neg= 0;
++  field_calendar->to_gregorian(ltime);
+   return ((!(fuzzydate & TIME_FUZZY_DATE) && (!ltime->month || !ltime->day)) ?
+           1 : 0);
+ }
+@@ -5529,7 +5547,13 @@ int Field_datetime::store(const char *fr
+                                MODE_INVALID_DATES))),
+                             &error);
+   if ((int) func_res > (int) MYSQL_TIMESTAMP_ERROR)
++  {
++    if (field_calendar->convert_date())
++      field_calendar->from_gregorian(&time_tmp);
++	else
++	  field_calendar->convert_date(1);
+     tmp= TIME_to_ulonglong_datetime(&time_tmp);
++  }
+   else
+     error= 1;                                 // Fix if invalid zero date
+ 
+@@ -5607,8 +5631,11 @@ int Field_datetime::store_time(TIME *lti
+     structure always fit into DATETIME range.
+   */
+   if (type == MYSQL_TIMESTAMP_DATE || type == MYSQL_TIMESTAMP_DATETIME)
++  {
++    field_calendar->from_gregorian(ltime);
+     tmp=((ltime->year*10000L+ltime->month*100+ltime->day)*LL(1000000)+
+ 	 (ltime->hour*10000L+ltime->minute*100+ltime->second));
++  }
+   else
+   {
+     tmp=0;
+@@ -5660,7 +5687,7 @@ String *Field_datetime::val_str(String *
+   ulonglong tmp;
+   long part1,part2;
+   char *pos;
+-  int part3;
++  int part3, part1y, part1m, part1d;
+ 
+ #ifdef WORDS_BIGENDIAN
+   if (table->s->db_low_byte_first)
+@@ -5675,6 +5702,14 @@ String *Field_datetime::val_str(String *
+ 
+   part1=(long) (tmp/LL(1000000));
+   part2=(long) (tmp - (ulonglong) part1*LL(1000000));
++  
++  part1d=(int) (part1 % 100); part1/=100;
++  part1m=(int) (part1 % 100); part1/=100;
++  part1y=(int) (part1);
++  if (field_calendar->convert_date())
++	field_calendar->to_gregorian(&part1y, &part1m, &part1d);
++  else
++    field_calendar->convert_date(1);
+ 
+   pos=(char*) val_buffer->ptr()+19;
+   *pos--=0;
+@@ -5687,16 +5722,16 @@ String *Field_datetime::val_str(String *
+   *pos--= (char) ('0'+(char) (part3%10)); part3/=10;
+   *pos--= (char) ('0'+(char) part3);
+   *pos--= ' ';
+-  *pos--= (char) ('0'+(char) (part1%10)); part1/=10;
+-  *pos--= (char) ('0'+(char) (part1%10)); part1/=10;
++  *pos--= (char) ('0'+(char) (part1d%10)); part1d/=10;
++  *pos--= (char) ('0'+(char) (part1d));
+   *pos--= '-';
+-  *pos--= (char) ('0'+(char) (part1%10)); part1/=10;
+-  *pos--= (char) ('0'+(char) (part1%10)); part3= (int) (part1/10);
++  *pos--= (char) ('0'+(char) (part1m%10)); part1m/=10;
++  *pos--= (char) ('0'+(char) (part1m));
+   *pos--= '-';
+-  *pos--= (char) ('0'+(char) (part3%10)); part3/=10;
+-  *pos--= (char) ('0'+(char) (part3%10)); part3/=10;
+-  *pos--= (char) ('0'+(char) (part3%10)); part3/=10;
+-  *pos=(char) ('0'+(char) part3);
++  *pos--= (char) ('0'+(char) (part1y%10)); part1y/=10;
++  *pos--= (char) ('0'+(char) (part1y%10)); part1y/=10;
++  *pos--= (char) ('0'+(char) (part1y%10)); part1y/=10;
++  *pos=(char) ('0'+(char) part1y);
+   return val_buffer;
+ }
+ 
+@@ -5716,6 +5751,7 @@ bool Field_datetime::get_date(TIME *ltim
+   ltime->day=		(int) (part1%100);
+   ltime->month= 	(int) (part1/100%100);
+   ltime->year= 		(int) (part1/10000);
++  field_calendar->to_gregorian(ltime);
+   return (!(fuzzydate & TIME_FUZZY_DATE) && (!ltime->month || !ltime->day)) ? 1 : 0;
+ }
+ 
+@@ -8181,7 +8217,8 @@ Field *make_field(char *ptr, uint32 fiel
+ 		  Field::utype unireg_check,
+ 		  TYPELIB *interval,
+ 		  const char *field_name,
+-		  struct st_table *table)
++		  struct st_table *table,
++		  Mcalendar *field_calendar)
+ {
+   uchar *bit_ptr;
+   uchar bit_offset;
+@@ -8327,13 +8364,13 @@ Field *make_field(char *ptr, uint32 fiel
+ 			  unireg_check, field_name, table, field_charset);
+   case FIELD_TYPE_NEWDATE:
+     return new Field_newdate(ptr,null_pos,null_bit,
+-			     unireg_check, field_name, table, field_charset);
++			     unireg_check, field_name, table, field_charset, field_calendar);
+   case FIELD_TYPE_TIME:
+     return new Field_time(ptr,null_pos,null_bit,
+ 			  unireg_check, field_name, table, field_charset);
+   case FIELD_TYPE_DATETIME:
+     return new Field_datetime(ptr,null_pos,null_bit,
+-			      unireg_check, field_name, table, field_charset);
++			      unireg_check, field_name, table, field_charset, field_calendar);
+   case FIELD_TYPE_NULL:
+     return new Field_null(ptr,field_length,unireg_check,field_name,table, field_charset);
+   case FIELD_TYPE_BIT:
+Only in sql.patched/: field.cpp
+diff -u -r -p sql.orig/field.h sql.patched/field.h
+--- sql.orig/field.h	2005-05-26 17:56:59.000000000 +0430
++++ sql.patched/field.h	2005-10-27 23:35:02.000000000 +0330
+@@ -28,6 +28,7 @@
+ 
+ class Send_field;
+ class Protocol;
++class Mcalendar;
+ struct st_cache_field;
+ void field_conv(Field *to,Field *from);
+ 
+@@ -856,13 +857,17 @@ public:
+ };
+ 
+ class Field_newdate :public Field_str {
++protected:
++  Mcalendar *field_calendar;
+ public:
+   Field_newdate(char *ptr_arg, uchar *null_ptr_arg, uchar null_bit_arg,
+ 		enum utype unireg_check_arg, const char *field_name_arg,
+-		struct st_table *table_arg, CHARSET_INFO *cs)
++		struct st_table *table_arg, CHARSET_INFO *cs, Mcalendar *calendar)
+     :Field_str(ptr_arg, 10, null_ptr_arg, null_bit_arg,
+ 	       unireg_check_arg, field_name_arg, table_arg, cs)
+-    {}
++    {
++      field_calendar=calendar;
++    }
+   enum_field_types type() const { return FIELD_TYPE_DATE;}
+   enum_field_types real_type() const { return FIELD_TYPE_NEWDATE; }
+   enum ha_base_keytype key_type() const { return HA_KEYTYPE_UINT24; }
+@@ -884,6 +889,7 @@ public:
+   bool zero_pack() const { return 1; }
+   bool get_date(TIME *ltime,uint fuzzydate);
+   bool get_time(TIME *ltime);
++  Mcalendar *get_calendar() { return field_calendar; }
+ };
+ 
+ 
+@@ -923,13 +929,17 @@ public:
+ 
+ 
+ class Field_datetime :public Field_str {
++protected:
++  Mcalendar *field_calendar;
+ public:
+   Field_datetime(char *ptr_arg, uchar *null_ptr_arg, uchar null_bit_arg,
+ 		 enum utype unireg_check_arg, const char *field_name_arg,
+-		 struct st_table *table_arg, CHARSET_INFO *cs)
++		 struct st_table *table_arg, CHARSET_INFO *cs, Mcalendar *calendar)
+     :Field_str(ptr_arg, 19, null_ptr_arg, null_bit_arg,
+ 	       unireg_check_arg, field_name_arg, table_arg, cs)
+-    {}
++    {
++      field_calendar= calendar;
++    }
+   Field_datetime(bool maybe_null_arg, const char *field_name_arg,
+ 		 struct st_table *table_arg, CHARSET_INFO *cs)
+     :Field_str((char*) 0,19, maybe_null_arg ? (uchar*) "": 0,0,
+@@ -956,6 +966,7 @@ public:
+   bool zero_pack() const { return 1; }
+   bool get_date(TIME *ltime,uint fuzzydate);
+   bool get_time(TIME *ltime);
++  Mcalendar *get_calendar() { return field_calendar; }
+ };
+ 
+ 
+@@ -1353,6 +1364,7 @@ public:
+   CHARSET_INFO *charset;
+   Field::geometry_type geom_type;
+   Field *field;				// For alter table
++  Mcalendar *calendar;
+ 
+   uint8 row,col,sc_length,interval_id;	// For rea_create_table
+   uint	offset,pack_flag;
+@@ -1414,7 +1426,8 @@ Field *make_field(char *ptr, uint32 fiel
+ 		  Field::geometry_type geom_type,
+ 		  Field::utype unireg_check,
+ 		  TYPELIB *interval, const char *field_name,
+-		  struct st_table *table);
++		  struct st_table *table,
++		  Mcalendar *calendar);
+ uint pack_length_to_packflag(uint type);
+ enum_field_types get_blob_type_from_length(ulong length);
+ uint32 calc_pack_length(enum_field_types type,uint32 length);
+diff -u -r -p sql.orig/item.cc sql.patched/item.cc
+--- sql.orig/item.cc	2005-05-26 17:57:00.000000000 +0430
++++ sql.patched/item.cc	2005-10-28 19:51:06.000000000 +0330
+@@ -303,7 +303,7 @@ Item::Item():
+ {
+   marker= 0;
+   maybe_null=null_value=with_sum_func=unsigned_flag=0;
+-  decimals= 0; max_length= 0;
++  decimals= 0; max_length= 0;calendar=0;
+ 
+   /* Put item in free list so that we can free all items at end */
+   THD *thd= current_thd;
+@@ -644,6 +644,8 @@ bool Item::get_date(TIME *ltime,uint fuz
+     bzero((char*) ltime,sizeof(*ltime));
+     return 1;
+   }
++  if (calendar)
++    calendar->to_gregorian(ltime);
+   return 0;
+ }
+ 
+@@ -662,6 +664,8 @@ bool Item::get_time(TIME *ltime)
+     bzero((char*) ltime,sizeof(*ltime));
+     return 1;
+   }
++  if (calendar)
++    calendar->to_gregorian(ltime);
+   return 0;
+ }
+ 
+@@ -1192,6 +1196,7 @@ bool Item_field::get_date(TIME *ltime,ui
+     bzero((char*) ltime,sizeof(*ltime));
+     return 1;
+   }
++  calendar= ((Field_newdate*)field)->get_calendar();
+   return 0;
+ }
+ 
+@@ -1213,6 +1218,7 @@ bool Item_field::get_time(TIME *ltime)
+     bzero((char*) ltime,sizeof(*ltime));
+     return 1;
+   }
++  calendar= ((Field_datetime*)field)->get_calendar();
+   return 0;
+ }
+ 
+@@ -3449,6 +3455,10 @@ int Item::save_in_field(Field *field, bo
+     CHARSET_INFO *cs= collation.collation;
+     char buff[MAX_FIELD_WIDTH];		// Alloc buffer for small columns
+     str_value.set_quick(buff, sizeof(buff), cs);
++    if (field->real_type() == FIELD_TYPE_NEWDATE)
++      calendar= ((Field_newdate*)field)->get_calendar();
++	else if (field->type() == FIELD_TYPE_DATETIME)
++      calendar= ((Field_datetime*)field)->get_calendar();
+     result=val_str(&str_value);
+     if (null_value)
+     {
+@@ -3492,6 +3502,10 @@ int Item_string::save_in_field(Field *fi
+ {
+   String *result;
+   result=val_str(&str_value);
++  if (field->real_type() == FIELD_TYPE_NEWDATE)
++    ((Field_newdate*)field)->get_calendar()->convert_date(0);
++  else if (field->type() == FIELD_TYPE_DATETIME)
++    ((Field_datetime*)field)->get_calendar()->convert_date(0);
+   if (null_value)
+     return set_field_to_null(field);
+   field->set_notnull();
+@@ -3871,6 +3885,8 @@ bool Item::send(Protocol *protocol, Stri
+   {
+     TIME tm;
+     get_date(&tm, TIME_FUZZY_DATE);
++	if (calendar)
++	  calendar->from_gregorian(&tm);
+     if (!null_value)
+     {
+       if (type == MYSQL_TYPE_DATE)
+diff -u -r -p sql.orig/item_func.h sql.patched/item_func.h
+--- sql.orig/item_func.h	2005-05-26 17:56:57.000000000 +0430
++++ sql.patched/item_func.h	2005-11-03 08:35:08.000000000 +0330
+@@ -139,7 +139,9 @@ public:
+   void count_decimal_length();
+   inline bool get_arg0_date(TIME *ltime, uint fuzzy_date)
+   {
+-    return (null_value=args[0]->get_date(ltime, fuzzy_date));
++    null_value=args[0]->get_date(ltime, fuzzy_date);
++    calendar= args[0]->calendar;
++    return (null_value);
+   }
+   inline bool get_arg0_time(TIME *ltime)
+   {
+diff -u -r -p sql.orig/item.h sql.patched/item.h
+--- sql.orig/item.h	2005-05-26 17:56:56.000000000 +0430
++++ sql.patched/item.h	2005-10-06 18:37:26.000000000 +0330
+@@ -265,6 +265,7 @@ public:
+   my_bool with_sum_func;
+   my_bool fixed;                        /* If item fixed with fix_fields */
+   DTCollation collation;
++  Mcalendar *calendar;
+ 
+   // alloc & destruct is done as start of select using sql_alloc
+   Item();
+diff -u -r -p sql.orig/item_timefunc.cc sql.patched/item_timefunc.cc
+--- sql.orig/item_timefunc.cc	2005-05-26 17:57:00.000000000 +0430
++++ sql.patched/item_timefunc.cc	2005-11-03 09:47:04.000000000 +0330
+@@ -47,6 +47,204 @@ static const char *day_names[]=
+ TYPELIB day_names_typelib=
+ { array_elements(day_names)-1,"", day_names, NULL};
+ 
++Mcalendar *get_calendar_by_name(char *calen)
++{
++  if (!my_strcasecmp(&my_charset_latin1, calen, "jalali"))
++    return new Mcalendar_jalali();
++  else if (!my_strcasecmp(&my_charset_latin1, calen, "gregorian"))
++    return new Mcalendar_gregorian();
++  else
++    return NULL;
++}
++ 
++Mcalendar *get_calendar_by_type(enum enum_calendar_type cal_type)
++{
++  switch(cal_type)
++  {
++    case GREGORIAN:
++      return new Mcalendar_gregorian();
++    case JALALI:
++      return new Mcalendar_jalali();
++    default:
++      return NULL;
++  }
++  return NULL;
++}
++//
++//enum enum_calendar_type get_calendar_type(char cal)
++//{
++//  if ((cal == 'G') || (cal == 'g'))
++//    return GREGORIAN;
++//  else if ((cal == 'J') || (cal == 'j'))
++//    return JALALI;
++//  else
++//    return NOT_VALID_CALENDAR;
++//}
++
++int j_days_in_month[12] = {31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29};
++
++void Mcalendar_jalali::gregorian_to_jalali(
++	int *j_y,
++	int *j_m,
++	int *j_d,
++	const int g_y,
++	const int g_m,
++	const int g_d)
++{
++   int gy, gm, gd;
++   int jy, jm, jd;
++   long g_day_no, j_day_no;
++   int j_np;
++ 
++   int i;
++   gy = g_y-1600;
++   gm = g_m-1;
++   gd = g_d-1;
++ 
++   g_day_no = 365*gy+(gy+3)/4-(gy+99)/100+(gy+399)/400;
++   for (i=0;i<gm;++i)
++      g_day_no += days_in_month[i];
++   if (gm>1 && ((gy%4==0 && gy%100!=0) || (gy%400==0)))
++      /* leap and after Feb */
++      ++g_day_no;
++   g_day_no += gd;
++ 
++   j_day_no = g_day_no-79;
++ 
++   j_np = j_day_no / 12053;
++   j_day_no %= 12053;
++ 
++   jy = 979+33*j_np+4*(j_day_no/1461);
++   j_day_no %= 1461;
++ 
++   if (j_day_no >= 366) {
++      jy += (j_day_no-1)/365;
++      j_day_no = (j_day_no-1)%365;
++   }
++ 
++   for (i = 0; i < 11 && j_day_no >= j_days_in_month[i]; ++i) {
++      j_day_no -= j_days_in_month[i];
++   }
++   jm = i+1;
++   jd = j_day_no+1;
++   *j_y = jy;
++   *j_m = jm;
++   *j_d = jd;
++}
++
++void Mcalendar_jalali::jalali_to_gregorian(
++	int *g_y,
++	int *g_m,
++	int *g_d,
++	const int j_y,
++	const int j_m,
++	const int j_d)
++{
++   int gy, gm, gd;
++   int jy, jm, jd;
++   long g_day_no, j_day_no;
++   int leap;
++
++   int i;
++
++   jy = j_y-979;
++   jm = j_m-1;
++   jd = j_d-1;
++
++   j_day_no = 365*jy + (jy/33)*8 + (jy%33+3)/4;
++   for (i=0; i < jm; ++i)
++      j_day_no += j_days_in_month[i];
++
++   j_day_no += jd;
++
++   g_day_no = j_day_no+79;
++
++   gy = 1600 + 400*(g_day_no/146097); /* 146097 = 365*400 + 400/4 - 400/100 + 400/400 */
++   g_day_no = g_day_no % 146097;
++
++   leap = 1;
++   if (g_day_no >= 36525) /* 36525 = 365*100 + 100/4 */
++   {
++      g_day_no--;
++      gy += 100*(g_day_no/36524); /* 36524 = 365*100 + 100/4 - 100/100 */
++      g_day_no = g_day_no % 36524;
++      
++      if (g_day_no >= 365)
++         g_day_no++;
++      else
++         leap = 0;
++   }
++
++   gy += 4*(g_day_no/1461); /* 1461 = 365*4 + 4/4 */
++   g_day_no %= 1461;
++
++   if (g_day_no >= 366) {
++      leap = 0;
++
++      g_day_no--;
++      gy += g_day_no/365;
++      g_day_no = g_day_no % 365;
++   }
++
++   for (i = 0; g_day_no >= days_in_month[i] + (i == 1 && leap); i++)
++      g_day_no -= days_in_month[i] + (i == 1 && leap);
++   gm = i+1;
++   gd = g_day_no+1;
++
++   *g_y = gy;
++   *g_m = gm;
++   *g_d = gd;
++}
++
++void Mcalendar_jalali::DateG2J(TIME *ltime)
++{
++  int g_y,g_m,g_d;
++  gregorian_to_jalali(&g_y, &g_m, &g_d, 
++	  (int)ltime->year, (int)ltime->month, (int)ltime->day);
++  ltime->year=  (unsigned)g_y;
++  ltime->month= (unsigned)g_m;
++  ltime->day=   (unsigned)g_d;
++}
++
++void Mcalendar_jalali::DateJ2G(TIME *ltime)
++{
++  int g_y,g_m,g_d;
++  jalali_to_gregorian(&g_y, &g_m, &g_d, 
++	  (int)ltime->year, (int)ltime->month, (int)ltime->day);
++  ltime->year=  (unsigned)g_y;
++  ltime->month= (unsigned)g_m;
++  ltime->day=   (unsigned)g_d;
++}
++
++void Mcalendar_jalali::to_gregorian(TIME *ltime)
++{
++  if (ltime->year>0 && ltime->month>0 && ltime->day>0)
++    DateJ2G(ltime);
++}
++
++void Mcalendar_jalali::to_gregorian(int *year, int *month, int *day)
++{
++  if (*year<=0 || *month<=0 || *day<=0)
++    return;
++  int g_y,g_m,g_d;
++  jalali_to_gregorian(&g_y, &g_m, &g_d, *year, *month, *day);
++  *year=g_y;
++  *month=g_m;
++  *day=g_d;
++}
++
++void Mcalendar_jalali::from_gregorian(TIME *ltime)
++{
++  if (ltime->year>0 && ltime->month>0 && ltime->day>0)
++    DateG2J(ltime);
++}
++int  Mcalendar_jalali::dayofyear(TIME l_time)
++{
++  if (l_time.year<=0 || l_time.month<=0 || l_time.day<=0)
++    return 0;
++  int month=l_time.month;
++  return ((month-1)*30 + (month>6 ? 6 : month-1) + l_time.day);
++}
+ 
+ /*
+   OPTIMIZATION TODO:
+@@ -894,6 +1092,12 @@ longlong Item_func_dayofyear::val_int()
+   TIME ltime;
+   if (get_arg0_date(&ltime,TIME_NO_ZERO_DATE))
+     return 0;
++  if (calendar)
++  {
++    calendar->from_gregorian(&ltime);
++    if (calendar->get_calendar_type() != GREGORIAN)
++	  return (longlong) calendar->dayofyear(ltime);
++  }
+   return (longlong) calc_daynr(ltime.year,ltime.month,ltime.day) -
+     calc_daynr(ltime.year,1,1) + 1;
+ }
+@@ -1887,9 +2091,11 @@ bool Item_date_add_interval::get_date(TI
+   INTERVAL interval;
+ 
+   ltime->neg= 0;
++  args[0]->calendar= calendar;
+   if (args[0]->get_date(ltime, TIME_NO_ZERO_DATE) ||
+       get_interval_value(args[1],int_type,&value,&interval))
+     goto null_date;
++  calendar= args[0]->calendar;
+   sign= (interval.neg ? -1 : 1);
+   if (date_sub_interval)
+     sign = -sign;
+Only in sql.patched/: item_timefunc.cc~
+diff -u -r -p sql.orig/item_timefunc.h sql.patched/item_timefunc.h
+--- sql.orig/item_timefunc.h	2005-05-26 17:56:58.000000000 +0430
++++ sql.patched/item_timefunc.h	2005-11-03 09:35:20.000000000 +0330
+@@ -26,6 +26,78 @@ enum date_time_format_types 
+   TIME_ONLY= 0, TIME_MICROSECOND, DATE_ONLY, DATE_TIME, DATE_TIME_MICROSECOND
+ };
+ 
++enum enum_calendar_type
++{ 
++  NOT_VALID_CALENDAR, GREGORIAN, JALALI 
++};
++
++Mcalendar *get_calendar_by_name(char *);
++Mcalendar *get_calendar_by_type(enum enum_calendar_type);
++//enum enum_calendar_type get_calendar_type(char);
++
++class Mcalendar
++{
++protected:
++  enum enum_calendar_type cal_type;
++  bool calendar_conv;
++public:
++  static void *operator new(size_t size) {return (void*) sql_alloc((uint) size); }
++  virtual void to_gregorian(TIME *ltime)=0;
++  virtual void to_gregorian(int *year, int *month, int *day)=0;
++  virtual void from_gregorian(TIME *ltime)=0;
++  virtual int  dayofyear(TIME l_time)=0;
++  /* This functions will be added also,
++  virtual int  maxvalidyear()=0;  //can be used to check each calendar range
++  virtual int  minvalidyear()=0;
++  
++  // needed functions for date operations
++  virtual char *monthname(int month)=0;
++  virtual int  dayofmonth(TIME l_time) =0;
++  virtual int  todays(TIME l_time)=0;
++  virtual int  daysinmonth(TIME l_time)=0;
++  virtual int  daysinyear(TIME l_time)=0;
++  // There maybe some other functions such as weekday, dayname, etc.
++  */
++  bool convert_date() {return calendar_conv;}
++  void convert_date(bool conv) {calendar_conv=conv;}
++  enum enum_calendar_type get_calendar_type() {return cal_type;}
++};
++
++class Mcalendar_gregorian:public Mcalendar
++{
++public:
++  Mcalendar_gregorian() 
++  {
++	  cal_type=GREGORIAN;
++	  calendar_conv=1;
++  }
++  void to_gregorian(TIME *ltime){};
++  void to_gregorian(int *year, int *month, int *day){};
++  void from_gregorian(TIME *ltime){}
++  int  dayofyear(TIME l_time){return 0;}
++};
++
++class Mcalendar_jalali:public Mcalendar
++{
++private:
++  void gregorian_to_jalali(int *, int *, int *,
++	                       const int, const int, const int);
++  void jalali_to_gregorian(int *, int *, int *,
++	                       const int, const int, const int);
++  void DateG2J(TIME *ltime);
++  void DateJ2G(TIME *ltime);
++public:
++  Mcalendar_jalali() 
++  {
++	  cal_type=JALALI;
++	  calendar_conv=1;
++  }
++  void to_gregorian(TIME *ltime);
++  void to_gregorian(int *year, int *month, int *day);
++  void from_gregorian(TIME *ltime);
++  int  dayofyear(TIME l_time);
++};
++
+ class Item_func_period_add :public Item_int_func
+ {
+ public:
+diff -u -r -p sql.orig/lex.h sql.patched/lex.h
+--- sql.orig/lex.h	2005-05-26 17:56:57.000000000 +0430
++++ sql.patched/lex.h	2005-11-03 08:35:51.000000000 +0330
+@@ -95,6 +95,7 @@ static SYMBOL symbols[] = {
+   { "BY",		SYM(BY)},
+   { "BYTE",		SYM(BYTE_SYM)},
+   { "CACHE",		SYM(CACHE_SYM)},
++  { "CALENDAR",		SYM(CALENDAR_SYM)},
+   { "CALL",             SYM(CALL_SYM)},
+   { "CASCADE",		SYM(CASCADE)},
+   { "CASCADED",         SYM(CASCADED)},
+diff -u -r -p sql.orig/protocol.cc sql.patched/protocol.cc
+--- sql.orig/protocol.cc	2005-05-26 17:56:58.000000000 +0430
++++ sql.patched/protocol.cc	2005-10-28 19:40:16.000000000 +0330
+@@ -887,7 +887,11 @@ bool Protocol_simple::store(Field *field
+   char buff[MAX_FIELD_WIDTH];
+   String str(buff,sizeof(buff), &my_charset_bin);
+   CHARSET_INFO *tocs= this->thd->variables.character_set_results;
+-
++  
++  if (field->real_type()== FIELD_TYPE_NEWDATE)
++    ((Field_newdate*)field)->get_calendar()->convert_date(0);
++  else if (field->type() == FIELD_TYPE_DATETIME)
++    ((Field_datetime*)field)->get_calendar()->convert_date(0);
+   field->val_str(&str);
+   return store_string_aux(str.ptr(), str.length(), str.charset(), tocs);
+ }
+diff -u -r -p sql.orig/sp_head.cc sql.patched/sp_head.cc
+--- sql.orig/sp_head.cc	2005-05-26 17:56:58.000000000 +0430
++++ sql.patched/sp_head.cc	2005-10-06 15:51:06.000000000 +0330
+@@ -539,7 +539,7 @@ sp_head::make_field(uint max_length, con
+ 		(uchar *)"", 0, m_returns_pack, m_returns, m_returns_cs,
+ 		(enum Field::geometry_type)0, Field::NONE, 
+ 		m_returns_typelib,
+-		name ? name : (const char *)m_name.str, dummy);
++		name ? name : (const char *)m_name.str, dummy, NULL);
+   DBUG_RETURN(field);
+ }
+ 
+diff -u -r -p sql.orig/sql_lex.h sql.patched/sql_lex.h
+--- sql.orig/sql_lex.h	2005-05-26 17:56:56.000000000 +0430
++++ sql.patched/sql_lex.h	2005-10-06 15:16:08.000000000 +0330
+@@ -700,6 +700,7 @@ typedef struct st_lex
+   gptr yacc_yyss,yacc_yyvs;
+   THD *thd;
+   CHARSET_INFO *charset;
++  Mcalendar *calendar;
+   TABLE_LIST *query_tables;	/* global list of all tables in this query */
+   /*
+     last element next_global of previous list (used only for list building
+diff -u -r -p sql.orig/sql_parse.cc sql.patched/sql_parse.cc
+--- sql.orig/sql_parse.cc	2005-05-26 17:56:56.000000000 +0430
++++ sql.patched/sql_parse.cc	2005-10-28 17:47:52.000000000 +0330
+@@ -5614,12 +5614,14 @@ new_create_field(THD *thd, char *field_n
+     /* fall trough */
+   case FIELD_TYPE_NEWDATE:
+     new_field->length=10;
++    new_field->calendar=thd->lex->calendar;
+     break;
+   case FIELD_TYPE_TIME:
+     new_field->length=10;
+     break;
+   case FIELD_TYPE_DATETIME:
+     new_field->length=19;
++	new_field->calendar=thd->lex->calendar;
+     break;
+   case FIELD_TYPE_SET:
+     {
+diff -u -r -p sql.orig/sql_select.cc sql.patched/sql_select.cc
+--- sql.orig/sql_select.cc	2005-05-26 17:56:57.000000000 +0430
++++ sql.patched/sql_select.cc	2005-10-06 15:41:41.000000000 +0330
+@@ -8547,7 +8547,7 @@ TABLE *create_virtual_tmp_table(THD *thd
+                        f_maybe_null(cdef->pack_flag) ? 1 : 0,
+                        cdef->pack_flag, cdef->sql_type, cdef->charset,
+                        cdef->geom_type, cdef->unireg_check,
+-                       cdef->interval, cdef->field_name, table);
++                       cdef->interval, cdef->field_name, table, cdef->calendar);
+     if (!*field)
+       goto error;
+     record_length+= (**field).pack_length();
+diff -u -r -p sql.orig/sql_yacc.h sql.patched/sql_yacc.h
+--- sql.orig/sql_yacc.h	2005-05-26 18:02:49.000000000 +0430
++++ sql.patched/sql_yacc.h	2005-11-03 08:41:19.000000000 +0330
+@@ -570,7 +570,8 @@
+      THEN_SYM = 796,
+      CASE_SYM = 797,
+      BETWEEN_SYM = 798,
+-     NEG = 799
++     NEG = 799,
++     CALENDAR_SYM = 800
+    };
+ #endif
+ #define END_OF_INPUT 258
+@@ -1115,6 +1116,7 @@
+ #define CASE_SYM 797
+ #define BETWEEN_SYM 798
+ #define NEG 799
++#define CALENDAR_SYM 800
+ 
+ 
+ 
+@@ -1158,6 +1160,7 @@ typedef union YYSTYPE {
+   struct { int vars, conds, hndlrs, curs; } spblock;
+   sp_name *spname;
+   struct st_lex *lex;
++  Mcalendar *calendar;
+ } YYSTYPE;
+ /* Line 1275 of yacc.c.  */
+ #line 1164 "y.tab.h"
+diff -u -r -p sql.orig/sql_yacc.yy sql.patched/sql_yacc.yy
+--- sql.orig/sql_yacc.yy	2005-05-26 17:56:57.000000000 +0430
++++ sql.patched/sql_yacc.yy	2005-10-27 23:28:06.000000000 +0330
+@@ -96,6 +96,7 @@ inline Item *is_truth_value(Item *A, boo
+   enum enum_tx_isolation tx_isolation;
+   enum Cast_target cast_type;
+   enum Item_udftype udf_type;
++  Mcalendar *calendar;
+   CHARSET_INFO *charset;
+   thr_lock_type lock_type;
+   interval_type interval, interval_time_st;
+@@ -159,6 +160,7 @@ bool my_yyoverflow(short **a, YYSTYPE **
+ %token  BY
+ %token  BYTE_SYM
+ %token  CACHE_SYM
++%token  CALENDAR_SYM
+ %token  CALL_SYM
+ %token  CASCADE
+ %token  CASCADED
+@@ -776,6 +778,8 @@ bool my_yyoverflow(short **a, YYSTYPE **
+ 	old_or_new_charset_name_or_default
+ 	collation_name
+ 	collation_name_or_default
++	
++%type <calendar> calendar_name
+ 
+ %type <variable> internal_variable_name
+ 
+@@ -815,7 +819,7 @@ bool my_yyoverflow(short **a, YYSTYPE **
+ 	union_clause union_list
+ 	precision subselect_start opt_and charset
+ 	subselect_end select_var_list select_var_list_init help opt_len
+-	opt_extended_describe
++	opt_extended_describe opt_calendar
+         prepare prepare_src execute deallocate 
+ 	statement sp_suid opt_view_list view_list or_replace algorithm
+ 	sp_c_chistics sp_a_chistics sp_chistic sp_c_chistic xa
+@@ -2859,7 +2863,7 @@ type:
+ 					  Lex->charset=&my_charset_bin;
+ 					  $$= MYSQL_TYPE_VARCHAR; }
+ 	| YEAR_SYM opt_len field_options { $$=FIELD_TYPE_YEAR; }
+-	| DATE_SYM			{ $$=FIELD_TYPE_DATE; }
++	| DATE_SYM	opt_calendar	{ $$=FIELD_TYPE_DATE; }
+ 	| TIME_SYM			{ $$=FIELD_TYPE_TIME; }
+ 	| TIMESTAMP opt_len
+ 	  {
+@@ -2874,7 +2878,7 @@ type:
+ 	      $$=FIELD_TYPE_TIMESTAMP;
+             }
+ 	   }
+-	| DATETIME			{ $$=FIELD_TYPE_DATETIME; }
++	| DATETIME	opt_calendar	{ $$=FIELD_TYPE_DATETIME; }
+ 	| TINYBLOB			{ Lex->charset=&my_charset_bin;
+ 					  $$=FIELD_TYPE_TINY_BLOB; }
+ 	| BLOB_SYM opt_len		{ Lex->charset=&my_charset_bin;
+@@ -2997,6 +3001,10 @@ opt_len:
+ 	/* empty */	{ Lex->length=(char*) 0; } /* use default length */
+ 	| '(' NUM ')'	{ Lex->length= $2.str; };
+ 
++opt_calendar:
++	/* empty */	{}
++	|  CALENDAR_SYM calendar_name { Lex->calendar=$2;};
++
+ opt_precision:
+ 	/* empty */	{}
+ 	| precision	{};
+@@ -3118,7 +3126,17 @@ opt_collate:
+ 
+ collation_name_or_default:
+ 	collation_name { $$=$1;   }
+-	| DEFAULT    { $$=NULL; } ;
++	| DEFAULT    { $$=NULL; } ;	
++	
++calendar_name:
++	ident_or_text
++	{
++	  if (!($$=get_calendar_by_name($1.str)))
++	  {
++	    my_error(ER_UNKNOWN_COLLATION, MYF(0), $1.str);
++	    YYABORT;
++	  }
++	};
+ 
+ opt_default:
+ 	/* empty */	{}
+diff -u -r -p sql.orig/table.cc sql.patched/table.cc
+--- sql.orig/table.cc	2005-05-26 17:57:00.000000000 +0430
++++ sql.patched/table.cc	2005-10-28 17:38:40.000000000 +0330
+@@ -467,6 +467,7 @@ int openfrm(THD *thd, const char *name, 
+     CHARSET_INFO *charset=NULL;
+     Field::geometry_type geom_type= Field::GEOM_GEOMETRY;
+     LEX_STRING comment;
++    Mcalendar *calendar;
+ 
+     if (new_frm_ver >= 3)
+     {
+@@ -492,7 +493,9 @@ int openfrm(THD *thd, const char *name, 
+       }
+       else
+       {
+-        if (!strpos[14])
++        if ((field_type == FIELD_TYPE_NEWDATE) || (field_type == FIELD_TYPE_DATETIME))
++          calendar= get_calendar_by_type((enum_calendar_type)((uint)strpos[14]));
++	else if (!strpos[14])
+           charset= &my_charset_bin;
+         else if (!(charset=get_charset((uint) strpos[14], MYF(0))))
+         {
+@@ -587,7 +590,8 @@ int openfrm(THD *thd, const char *name, 
+ 		  share->intervals+interval_nr-1 :
+ 		  (TYPELIB*) 0),
+ 		 share->fieldnames.type_names[i],
+-		 outparam);
++		 outparam,
++		 calendar);
+     if (!reg_field)				// Not supported field type
+     {
+       error= 4;
+diff -u -r -p sql.orig/unireg.cc sql.patched/unireg.cc
+--- sql.orig/unireg.cc	2005-05-26 17:57:00.000000000 +0430
++++ sql.patched/unireg.cc	2005-10-28 04:45:58.000000000 +0330
+@@ -586,6 +586,11 @@ static bool pack_fields(File file, List<
+       DBUG_ASSERT(0);                           // Should newer happen
+ #endif
+     }
++    else if ((field->sql_type == FIELD_TYPE_NEWDATE) || (field->sql_type == FIELD_TYPE_DATETIME))
++      if (field->calendar)
++        buff[14]= (uchar) (field->calendar->get_calendar_type());
++      else
++        buff[14]= 1;
+     else if (field->charset) 
+       buff[14]= (uchar) field->charset->number;
+     else
+@@ -714,7 +719,8 @@ static bool make_empty_rec(THD *thd, Fil
+ 			       field->unireg_check,
+ 			       field->interval,
+ 			       field->field_name,
+-			       &table);
++			       &table,
++			       field->calendar);
+     if (!regfield)
+       goto err;                                 // End of memory
+ 
